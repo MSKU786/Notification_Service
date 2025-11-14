@@ -4,6 +4,7 @@ const bodyParser = require('koa-bodyparser');
 const { loadPlugins } = require('./pluginLoader');
 
 const app = new Koa();
+const router = new Router();
 const PORT = process.env.PORT || 3000;
 const context = { db: {}, logger: console };
 const plugins = loadPlugins();

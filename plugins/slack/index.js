@@ -8,4 +8,4 @@ const slackPlugin = {
   },
 };
 
-module.exports = { slackPlugin };
+module.exports = slackPlugin;
