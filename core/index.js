@@ -9,6 +9,7 @@ const PORT = process.env.PORT || 3000;
 const context = { db: {}, logger: console };
 const plugins = loadPlugins();
 
+// attach shared context to every request
 app.use(async (ctx, next) => {
   ctx.db = context.db;
   ctx.logger = context.logger;
@@ -20,27 +21,32 @@ app.use(async (ctx, next) => {
   await next();
 });
 
-router.post('/notifcy', async (ctx) => {
-  const { type, message } = ctx.reqeust.body;
+router.post('/notify', async (ctx) => {
+  const { type, message } = ctx.request.body || {};
   if (!type || !message) {
-    ctx.status = 404;
-    ctx.body = { error: 'Required Fields are missing' };
+    ctx.status = 400;
+    ctx.body = { error: 'Required fields are missing: type, message' };
+    return;
   }
 
   const plugin = plugins[type];
   if (!plugin) {
     ctx.status = 404;
-    ctx.body = { error: 'Invalid Plugin' };
+    ctx.body = { error: `Invalid channel: ${type}` };
+    return;
   }
 
   await plugin.send(message, ctx);
   ctx.body = { status: 'sent', via: type };
 });
 
+// bodyParser must run before the router so ctx.request.body is populated
 app.use(bodyParser());
 app.use(router.routes());
+app.use(router.allowedMethods());
 
-(async () => {
-  await loadPlugins();
-  app.listen(PORT, () => console.log('Server running on port 3000'));
-})();
+app.listen(PORT, () => {
+  const loaded = Object.keys(plugins);
+  console.log(`Server running on port ${PORT}`);
+  console.log(`Loaded channels: ${loaded.length ? loaded.join(', ') : 'none'}`);
+});
