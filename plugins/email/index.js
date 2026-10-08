@@ -1,10 +1,18 @@
 const emailPlugin = {
   name: 'email',
-  send: async (message, context) => {
-    context.logger.info(`[Email Plugin] Sending email: ${message}`);
+  send: async ({ to, message, meta }, context) => {
+    if (!to) throw new Error('email requires a "to" address');
+    const subject = (meta && meta.subject) || 'Notification';
+    context.logger.info(`[Email Plugin] Sending to ${to} ("${subject}"): ${message}`);
     // Replace this mock with a real email provider integration (SendGrid, SES, etc.)
     await new Promise((res) => setTimeout(res, 250));
-    context.logger.info('[Email Plugin] Sent');
+    return {
+      channel: 'email',
+      to,
+      subject,
+      messageId: `email_${Date.now()}`,
+      deliveredAt: new Date().toISOString(),
+    };
   },
 };
 
