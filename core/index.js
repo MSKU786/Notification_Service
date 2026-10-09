@@ -2,6 +2,7 @@ const Koa = require('koa');
 const Router = require('@koa/router');
 const bodyParser = require('koa-bodyparser');
 const { loadPlugins } = require('./pluginLoader');
+const { validateNotification } = require('./validate');
 
 const app = new Koa();
 const router = new Router();
@@ -22,22 +23,35 @@ app.use(async (ctx, next) => {
 });
 
 router.post('/notify', async (ctx) => {
-  const { type, message } = ctx.request.body || {};
-  if (!type || !message) {
+  const body = ctx.request.body || {};
+  const { errors, value } = validateNotification(body);
+
+  if (errors.length) {
     ctx.status = 400;
-    ctx.body = { error: 'Required fields are missing: type, message' };
+    ctx.body = { error: 'Invalid request', details: errors };
     return;
   }
 
+  const { type, to, message, meta } = value;
   const plugin = plugins[type];
   if (!plugin) {
     ctx.status = 404;
-    ctx.body = { error: `Invalid channel: ${type}` };
+    ctx.body = {
+      error: `Unknown channel: ${type}`,
+      available: Object.keys(plugins),
+    };
     return;
   }
 
-  await plugin.send(message, ctx);
-  ctx.body = { status: 'sent', via: type };
+  try {
+    const result = await plugin.send({ to, message, meta }, ctx);
+    ctx.status = 200;
+    ctx.body = { status: 'sent', via: type, result };
+  } catch (err) {
+    ctx.logger.error(`[${type}] send failed: ${err.message}`);
+    ctx.status = 502;
+    ctx.body = { status: 'failed', via: type, error: err.message };
+  }
 });
 
 // bodyParser must run before the router so ctx.request.body is populated
