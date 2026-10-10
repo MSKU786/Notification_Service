@@ -1,15 +1,27 @@
 const emailPlugin = {
   name: 'email',
-  send: async ({ to, message, meta }, context) => {
+  config: {},
+
+  init(config) {
+    this.config = config || {};
+  },
+
+  send: async function ({ to, message, meta }, context) {
     if (!to) throw new Error('email requires a "to" address');
     const subject = (meta && meta.subject) || 'Notification';
-    context.logger.info(`[Email Plugin] Sending to ${to} ("${subject}"): ${message}`);
-    // Replace this mock with a real email provider integration (SendGrid, SES, etc.)
+    const from = this.config.from || 'no-reply@example.com';
+    const mode = this.config.configured ? 'live' : 'mock';
+    context.logger.info(
+      `[Email Plugin:${mode}] ${from} -> ${to} ("${subject}"): ${message}`
+    );
+    // Replace this mock with a real provider (SES, SendGrid) using this.config.
     await new Promise((res) => setTimeout(res, 250));
     return {
       channel: 'email',
       to,
+      from,
       subject,
+      mode,
       messageId: `email_${Date.now()}`,
       deliveredAt: new Date().toISOString(),
     };
