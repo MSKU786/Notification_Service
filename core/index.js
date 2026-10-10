@@ -3,12 +3,14 @@ const Router = require('@koa/router');
 const bodyParser = require('koa-bodyparser');
 const { loadPlugins } = require('./pluginLoader');
 const { validateNotification } = require('./validate');
+const { buildConfig, redact } = require('./config');
 
 const app = new Koa();
 const router = new Router();
 const PORT = process.env.PORT || 3000;
-const context = { db: {}, logger: console };
-const plugins = loadPlugins();
+const config = buildConfig();
+const context = { db: {}, logger: console, config };
+const plugins = loadPlugins(config, context);
 
 // attach shared context to every request
 app.use(async (ctx, next) => {
@@ -63,4 +65,10 @@ app.listen(PORT, () => {
   const loaded = Object.keys(plugins);
   console.log(`Server running on port ${PORT}`);
   console.log(`Loaded channels: ${loaded.length ? loaded.join(', ') : 'none'}`);
+  for (const name of loaded) {
+    const cfg = config[name];
+    const state = cfg && cfg.configured ? 'configured' : 'mock mode';
+    console.log(`  - ${name}: ${state}`);
+  }
+  console.log('Config:', JSON.stringify(redact(config)));
 });

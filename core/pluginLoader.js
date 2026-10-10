@@ -1,7 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 
-function loadPlugins() {
+function loadPlugins(config = {}, context = {}) {
   const pluginsDir = path.join(__dirname, '../plugins');
   const plugins = {};
 
@@ -36,6 +36,19 @@ function loadPlugins() {
           `Plugin "${folder}" does not export a valid plugin, skipping.`
         );
         return;
+      }
+
+      // Optional init hook: hand the plugin its channel config once at load.
+      if (typeof plugin.init === 'function') {
+        const channelConfig = config[plugin.name] || {};
+        try {
+          plugin.init(channelConfig, context);
+        } catch (err) {
+          console.warn(
+            `Plugin "${plugin.name}" init failed, skipping: ${err.message}`
+          );
+          return;
+        }
       }
 
       plugins[plugin.name] = plugin;
