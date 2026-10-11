@@ -4,6 +4,7 @@ const bodyParser = require('koa-bodyparser');
 const { loadPlugins } = require('./pluginLoader');
 const { validateNotification } = require('./validate');
 const { buildConfig, redact } = require('./config');
+const { JobQueue } = require('./queue');
 
 const app = new Koa();
 const router = new Router();
@@ -11,6 +12,17 @@ const PORT = process.env.PORT || 3000;
 const config = buildConfig();
 const context = { db: {}, logger: console, config };
 const plugins = loadPlugins(config, context);
+
+// Worker: turn a queued job into a provider send via its channel plugin.
+const queue = new JobQueue({
+  logger: console,
+  processor: async (job) => {
+    const plugin = plugins[job.type];
+    if (!plugin) throw new Error(`Unknown channel: ${job.type}`);
+    return plugin.send(job.payload, context);
+  },
+});
+queue.start();
 
 // attach shared context to every request
 app.use(async (ctx, next) => {
@@ -35,8 +47,7 @@ router.post('/notify', async (ctx) => {
   }
 
   const { type, to, message, meta } = value;
-  const plugin = plugins[type];
-  if (!plugin) {
+  if (!plugins[type]) {
     ctx.status = 404;
     ctx.body = {
       error: `Unknown channel: ${type}`,
@@ -45,15 +56,35 @@ router.post('/notify', async (ctx) => {
     return;
   }
 
-  try {
-    const result = await plugin.send({ to, message, meta }, ctx);
-    ctx.status = 200;
-    ctx.body = { status: 'sent', via: type, result };
-  } catch (err) {
-    ctx.logger.error(`[${type}] send failed: ${err.message}`);
-    ctx.status = 502;
-    ctx.body = { status: 'failed', via: type, error: err.message };
+  // Enqueue and return immediately — delivery happens in the background worker.
+  const job = queue.enqueue({ type, payload: { to, message, meta } });
+  ctx.status = 202;
+  ctx.body = {
+    id: job.id,
+    status: 'queued', // accepted state; poll statusUrl for progress
+    via: type,
+    statusUrl: `/notify/${job.id}`,
+  };
+});
+
+router.get('/notify/:id', async (ctx) => {
+  const job = queue.get(ctx.params.id);
+  if (!job) {
+    ctx.status = 404;
+    ctx.body = { error: 'Job not found' };
+    return;
   }
+  ctx.status = 200;
+  ctx.body = {
+    id: job.id,
+    via: job.type,
+    status: job.status,
+    attempts: job.attempts,
+    result: job.result,
+    error: job.error,
+    createdAt: job.createdAt,
+    updatedAt: job.updatedAt,
+  };
 });
 
 // bodyParser must run before the router so ctx.request.body is populated
