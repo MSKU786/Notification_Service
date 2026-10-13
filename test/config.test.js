@@ -71,3 +71,36 @@ test('redact does not mutate the input config', () => {
   redact(cfg);
   assert.strictEqual(cfg.email.apiKey, 'k');
 });
+
+test('queue retry policy defaults when env is unset', () => {
+  const { queue } = buildConfig({});
+  assert.deepStrictEqual(queue, {
+    maxAttempts: 3,
+    baseDelayMs: 500,
+    maxDelayMs: 30000,
+  });
+});
+
+test('queue retry policy reads positive integers from env', () => {
+  const { queue } = buildConfig({
+    QUEUE_MAX_ATTEMPTS: '5',
+    QUEUE_BASE_DELAY_MS: '250',
+    QUEUE_MAX_DELAY_MS: '10000',
+  });
+  assert.deepStrictEqual(queue, {
+    maxAttempts: 5,
+    baseDelayMs: 250,
+    maxDelayMs: 10000,
+  });
+});
+
+test('queue retry policy falls back on malformed or non-positive env', () => {
+  for (const bad of ['0', '-1', 'abc', '', '2.5']) {
+    const { queue } = buildConfig({ QUEUE_MAX_ATTEMPTS: bad });
+    assert.strictEqual(
+      queue.maxAttempts,
+      3,
+      `expected default for QUEUE_MAX_ATTEMPTS=${JSON.stringify(bad)}`
+    );
+  }
+});
