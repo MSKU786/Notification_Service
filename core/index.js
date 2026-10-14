@@ -14,8 +14,12 @@ const context = { db: {}, logger: console, config };
 const plugins = loadPlugins(config, context);
 
 // Worker: turn a queued job into a provider send via its channel plugin.
+// Failed sends are retried with exponential backoff per config.queue.
 const queue = new JobQueue({
   logger: console,
+  maxAttempts: config.queue.maxAttempts,
+  baseDelayMs: config.queue.baseDelayMs,
+  maxDelayMs: config.queue.maxDelayMs,
   processor: async (job) => {
     const plugin = plugins[job.type];
     if (!plugin) throw new Error(`Unknown channel: ${job.type}`);
@@ -80,6 +84,7 @@ router.get('/notify/:id', async (ctx) => {
     via: job.type,
     status: job.status,
     attempts: job.attempts,
+    maxAttempts: queue.maxAttempts,
     result: job.result,
     error: job.error,
     createdAt: job.createdAt,

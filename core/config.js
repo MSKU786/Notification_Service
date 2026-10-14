@@ -29,7 +29,22 @@ function buildConfig(env = process.env) {
   };
   slack.configured = Boolean(slack.token);
 
-  return { email, sms, slack };
+  // Queue retry policy. Falls back to sane defaults when env is unset or
+  // malformed, so a bad value never silently disables retries.
+  const queue = {
+    maxAttempts: toPositiveInt(env.QUEUE_MAX_ATTEMPTS, 3),
+    baseDelayMs: toPositiveInt(env.QUEUE_BASE_DELAY_MS, 500),
+    maxDelayMs: toPositiveInt(env.QUEUE_MAX_DELAY_MS, 30000),
+  };
+
+  return { email, sms, slack, queue };
+}
+
+function toPositiveInt(raw, fallback) {
+  // Number() (not parseInt) so partial values like "2.5" or "5abc" are
+  // treated as malformed and fall back, rather than silently truncating.
+  const n = Number(raw);
+  return Number.isInteger(n) && n > 0 ? n : fallback;
 }
 
 /**

@@ -51,3 +51,44 @@ function validateNotification(body) {
 }
 
 module.exports = { validateNotification };
+
+function reconcillePosition(l1, brokerList) {
+  let map = new Map();
+  let ans = [];
+  for (let l of li) {
+    map.set(l.symbol, l);
+  }
+
+  for (let b of brokerList) {
+    if (map.has(b.symbol)) {
+      if (b.quantity != map.get(b.symbol).quantity) {
+        let mistmatch = {
+          symbol: b.symbol,
+          quantity: b.quantity,
+          brokerQuantity: map.get(b.symbol).quantity,
+        };
+        ans.push(mistmatch);
+      } else {
+        map.delete(b.symbol);
+      }
+    } else {
+      let missing = {
+        symbol: b.symbol,
+        quantity: 0,
+        brokerQuantity: b.quantity,
+      };
+      ans.push(missing);
+    }
+
+    for (let [key, value] of map) {
+      let missing = {
+        symbol: key,
+        quantity: value.quantity,
+        brokerQuantity: 0,
+      };
+      ans.push(missing);
+    }
+  }
+
+  return ans;
+}
