@@ -1,10 +1,11 @@
 const crypto = require('crypto');
+const { MemoryStore } = require('./store');
 
 /**
- * In-memory job queue with a background worker.
+ * Background job queue with a pluggable persistence store.
  *
- * This is intentionally a thin abstraction (enqueue / get / start / stop) so
- * the in-memory backing can later be swapped for Redis/BullMQ without the
+ * The backing store (see store.js) is a thin get/set/all interface, so the
+ * in-memory default can be swapped for a file/Redis/BullMQ store without the
  * HTTP layer changing. Jobs move:
  *
  *   queued -> processing -> sent
@@ -31,6 +32,7 @@ class JobQueue {
     baseDelayMs = 500,
     maxDelayMs = 30000,
     backoff,
+    store,
   } = {}) {
     if (typeof processor !== 'function') {
       throw new Error('JobQueue requires a processor function');
@@ -40,6 +42,7 @@ class JobQueue {
     }
     this.processor = processor;
     this.logger = logger;
+    this.store = store || new MemoryStore();
     this.maxAttempts = maxAttempts;
     this.baseDelayMs = baseDelayMs;
     this.maxDelayMs = maxDelayMs;
@@ -48,7 +51,6 @@ class JobQueue {
         ? backoff
         : (attempts) =>
             Math.min(this.baseDelayMs * 2 ** (attempts - 1), this.maxDelayMs);
-    this.jobs = new Map(); // id -> job
     this.pending = []; // ids awaiting processing
     this.timers = new Set(); // outstanding retry timers
     this.running = false; // worker loop active
@@ -68,7 +70,7 @@ class JobQueue {
       createdAt: now,
       updatedAt: now,
     };
-    this.jobs.set(job.id, job);
+    this.store.set(job);
     this.pending.push(job.id);
     this.logger.log(`[queue] enqueued ${job.id} (${type})`);
     if (this.running) this._drain();
@@ -76,7 +78,27 @@ class JobQueue {
   }
 
   get(id) {
-    return this.jobs.get(id) || null;
+    return this.store.get(id);
+  }
+
+  // Re-queue jobs the store held in a non-terminal state — e.g. a restart
+  // interrupted them mid-flight. Their attempt count is preserved, so the
+  // retry budget still applies. Terminal jobs (sent/failed) are left as-is.
+  recover() {
+    let recovered = 0;
+    for (const job of this.store.all()) {
+      if (job.status === 'sent' || job.status === 'failed') continue;
+      if (job.status !== 'queued') {
+        this._touch(job, { status: 'queued' });
+      }
+      this.pending.push(job.id);
+      recovered += 1;
+    }
+    if (recovered) {
+      this.logger.log(`[queue] recovered ${recovered} pending job(s)`);
+      if (this.running) this._drain();
+    }
+    return recovered;
   }
 
   start() {
@@ -93,6 +115,7 @@ class JobQueue {
 
   _touch(job, patch) {
     Object.assign(job, patch, { updatedAt: new Date().toISOString() });
+    this.store.set(job); // persist every state transition
   }
 
   async _drain() {
@@ -101,7 +124,7 @@ class JobQueue {
     try {
       while (this.running && this.pending.length > 0) {
         const id = this.pending.shift();
-        const job = this.jobs.get(id);
+        const job = this.store.get(id);
         if (!job) continue;
 
         this._touch(job, { status: 'processing', attempts: job.attempts + 1 });

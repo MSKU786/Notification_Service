@@ -5,6 +5,7 @@ const { loadPlugins } = require('./pluginLoader');
 const { validateNotification } = require('./validate');
 const { buildConfig, redact } = require('./config');
 const { JobQueue } = require('./queue');
+const { createStore } = require('./store');
 
 const app = new Koa();
 const router = new Router();
@@ -15,8 +16,10 @@ const plugins = loadPlugins(config, context);
 
 // Worker: turn a queued job into a provider send via its channel plugin.
 // Failed sends are retried with exponential backoff per config.queue.
+const store = createStore(config.queue, console);
 const queue = new JobQueue({
   logger: console,
+  store,
   maxAttempts: config.queue.maxAttempts,
   baseDelayMs: config.queue.baseDelayMs,
   maxDelayMs: config.queue.maxDelayMs,
@@ -27,6 +30,8 @@ const queue = new JobQueue({
   },
 });
 queue.start();
+// Resume any jobs a previous run left mid-flight (file store only).
+queue.recover();
 
 // attach shared context to every request
 app.use(async (ctx, next) => {
@@ -100,6 +105,7 @@ app.use(router.allowedMethods());
 app.listen(PORT, () => {
   const loaded = Object.keys(plugins);
   console.log(`Server running on port ${PORT}`);
+  console.log(`Job store: ${config.queue.store}`);
   console.log(`Loaded channels: ${loaded.length ? loaded.join(', ') : 'none'}`);
   for (const name of loaded) {
     const cfg = config[name];

@@ -35,6 +35,9 @@ function buildConfig(env = process.env) {
     maxAttempts: toPositiveInt(env.QUEUE_MAX_ATTEMPTS, 3),
     baseDelayMs: toPositiveInt(env.QUEUE_BASE_DELAY_MS, 500),
     maxDelayMs: toPositiveInt(env.QUEUE_MAX_DELAY_MS, 30000),
+    // Persistence backend: "memory" (default) or "file".
+    store: env.QUEUE_STORE === 'file' ? 'file' : 'memory',
+    file: env.QUEUE_FILE || 'data/jobs.json',
   };
 
   return { email, sms, slack, queue };
