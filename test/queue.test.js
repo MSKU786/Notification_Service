@@ -1,6 +1,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
 const { JobQueue } = require('../core/queue');
+const { MemoryStore } = require('../core/store');
 
 const silent = { log() {}, error() {}, info() {}, warn() {} };
 
@@ -199,4 +200,54 @@ test('each processed job gets a fresh, increasing updatedAt', async () => {
   const createdAt = job.createdAt;
   const done = await waitFor(queue, job.id);
   assert.ok(done.updatedAt >= createdAt);
+});
+
+test('every state transition is written through to the store', async () => {
+  const store = new MemoryStore();
+  const queue = new JobQueue({
+    store,
+    processor: async () => ({ ok: true }),
+    logger: silent,
+  });
+  // enqueue before starting so we can observe the persisted 'queued' state
+  // (a running queue drains synchronously up to the processor's first await)
+  const job = queue.enqueue({ type: 'email', payload: {} });
+  assert.strictEqual(store.get(job.id).status, 'queued');
+  queue.start();
+  const done = await waitFor(queue, job.id);
+  // and the terminal state is reflected in the store, not just the job ref
+  assert.strictEqual(store.get(job.id).status, 'sent');
+  assert.deepStrictEqual(store.get(done.id).result, { ok: true });
+});
+
+test('recover() re-queues non-terminal jobs from the store and runs them', async () => {
+  const store = new MemoryStore();
+  // Seed the store as if a previous run had been interrupted mid-flight.
+  store.set({ id: 'q1', type: 'email', payload: {}, status: 'queued', attempts: 0, result: null, error: null });
+  store.set({ id: 'p1', type: 'email', payload: {}, status: 'processing', attempts: 1, result: null, error: null });
+  store.set({ id: 'r1', type: 'email', payload: {}, status: 'retrying', attempts: 2, result: null, error: 'boom' });
+  store.set({ id: 'done', type: 'email', payload: {}, status: 'sent', attempts: 1, result: { ok: 1 }, error: null });
+  store.set({ id: 'dead', type: 'email', payload: {}, status: 'failed', attempts: 3, result: null, error: 'gone' });
+
+  const queue = new JobQueue({ store, processor: async () => 'ok', logger: silent });
+  queue.start();
+  const count = queue.recover();
+  assert.strictEqual(count, 3); // q1, p1, r1 — not the terminal two
+
+  for (const id of ['q1', 'p1', 'r1']) {
+    const done = await waitFor(queue, id);
+    assert.strictEqual(done.status, 'sent');
+  }
+  // interrupted 'processing'/'retrying' were reset to queued then re-run,
+  // preserving their prior attempt count (so the retry budget still holds)
+  assert.strictEqual(store.get('p1').attempts, 2); // 1 prior + 1 this run
+  assert.strictEqual(store.get('r1').attempts, 3); // 2 prior + 1 this run
+  // terminal jobs are untouched by recovery
+  assert.strictEqual(store.get('done').status, 'sent');
+  assert.strictEqual(store.get('dead').status, 'failed');
+});
+
+test('recover() returns 0 and does nothing on an empty store', () => {
+  const queue = new JobQueue({ processor: async () => 'ok', logger: silent });
+  assert.strictEqual(queue.recover(), 0);
 });

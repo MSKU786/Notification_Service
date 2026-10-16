@@ -78,6 +78,8 @@ test('queue retry policy defaults when env is unset', () => {
     maxAttempts: 3,
     baseDelayMs: 500,
     maxDelayMs: 30000,
+    store: 'memory',
+    file: 'data/jobs.json',
   });
 });
 
@@ -91,7 +93,19 @@ test('queue retry policy reads positive integers from env', () => {
     maxAttempts: 5,
     baseDelayMs: 250,
     maxDelayMs: 10000,
+    store: 'memory',
+    file: 'data/jobs.json',
   });
+});
+
+test('queue store selection: only "file" enables the file backend', () => {
+  assert.strictEqual(buildConfig({}).queue.store, 'memory');
+  assert.strictEqual(buildConfig({ QUEUE_STORE: 'file' }).queue.store, 'file');
+  assert.strictEqual(buildConfig({ QUEUE_STORE: 'redis' }).queue.store, 'memory');
+  assert.strictEqual(
+    buildConfig({ QUEUE_FILE: '/var/jobs.json' }).queue.file,
+    '/var/jobs.json'
+  );
 });
 
 test('queue retry policy falls back on malformed or non-positive env', () => {
