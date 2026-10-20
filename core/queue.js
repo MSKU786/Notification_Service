@@ -81,6 +81,31 @@ class JobQueue {
     return this.store.get(id);
   }
 
+  // List jobs, newest first, optionally filtered by status. Used by the
+  // dead-letter view (status: 'failed') and general job inspection.
+  list({ status } = {}) {
+    let jobs = this.store.all();
+    if (status) jobs = jobs.filter((j) => j.status === status);
+    return jobs.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+  }
+
+  // Manually requeue a dead-lettered (failed) job — e.g. after the provider
+  // outage that failed it is resolved. The attempt count resets so the job
+  // gets a fresh retry budget. Returns:
+  //   null                       job id not found
+  //   { requeued: false, job }   job exists but isn't in a failed state
+  //   { requeued: true,  job }   job was reset to queued and re-enqueued
+  requeue(id) {
+    const job = this.store.get(id);
+    if (!job) return null;
+    if (job.status !== 'failed') return { requeued: false, job };
+    this._touch(job, { status: 'queued', attempts: 0, error: null, result: null });
+    this.pending.push(job.id);
+    this.logger.log(`[queue] requeued ${job.id} from dead-letter`);
+    if (this.running) this._drain();
+    return { requeued: true, job };
+  }
+
   // Re-queue jobs the store held in a non-terminal state — e.g. a restart
   // interrupted them mid-flight. Their attempt count is preserved, so the
   // retry budget still applies. Terminal jobs (sent/failed) are left as-is.
