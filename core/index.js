@@ -45,6 +45,21 @@ app.use(async (ctx, next) => {
   await next();
 });
 
+// Compact view of a job for list/detail responses (payload omitted to keep
+// listings light; the detail route adds `result`).
+const summarize = (job) => ({
+  id: job.id,
+  via: job.type,
+  status: job.status,
+  attempts: job.attempts,
+  maxAttempts: queue.maxAttempts,
+  error: job.error,
+  createdAt: job.createdAt,
+  updatedAt: job.updatedAt,
+});
+
+const JOB_STATUSES = ['queued', 'processing', 'retrying', 'sent', 'failed'];
+
 router.post('/notify', async (ctx) => {
   const body = ctx.request.body || {};
   const { errors, value } = validateNotification(body);
@@ -84,16 +99,43 @@ router.get('/notify/:id', async (ctx) => {
     return;
   }
   ctx.status = 200;
+  ctx.body = { ...summarize(job), result: job.result };
+});
+
+// List jobs, newest first. ?status=failed is the dead-letter view.
+router.get('/jobs', async (ctx) => {
+  const status = ctx.query.status;
+  if (status && !JOB_STATUSES.includes(status)) {
+    ctx.status = 400;
+    ctx.body = { error: `Invalid status "${status}"`, valid: JOB_STATUSES };
+    return;
+  }
+  const jobs = queue.list({ status });
+  ctx.status = 200;
+  ctx.body = { count: jobs.length, jobs: jobs.map(summarize) };
+});
+
+// Manually requeue a dead-lettered (failed) job with a fresh retry budget.
+router.post('/notify/:id/retry', async (ctx) => {
+  const outcome = queue.requeue(ctx.params.id);
+  if (!outcome) {
+    ctx.status = 404;
+    ctx.body = { error: 'Job not found' };
+    return;
+  }
+  if (!outcome.requeued) {
+    ctx.status = 409;
+    ctx.body = {
+      error: `Only failed jobs can be retried (job is "${outcome.job.status}")`,
+    };
+    return;
+  }
+  ctx.status = 202;
   ctx.body = {
-    id: job.id,
-    via: job.type,
-    status: job.status,
-    attempts: job.attempts,
-    maxAttempts: queue.maxAttempts,
-    result: job.result,
-    error: job.error,
-    createdAt: job.createdAt,
-    updatedAt: job.updatedAt,
+    id: outcome.job.id,
+    status: 'queued',
+    via: outcome.job.type,
+    statusUrl: `/notify/${outcome.job.id}`,
   };
 });
 
