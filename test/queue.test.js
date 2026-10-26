@@ -251,3 +251,58 @@ test('recover() returns 0 and does nothing on an empty store', () => {
   const queue = new JobQueue({ processor: async () => 'ok', logger: silent });
   assert.strictEqual(queue.recover(), 0);
 });
+
+test('list() returns jobs newest-first and filters by status', () => {
+  const store = new MemoryStore();
+  store.set({ id: 'old', type: 'email', status: 'sent', attempts: 1, createdAt: '2026-01-01T00:00:00.000Z' });
+  store.set({ id: 'mid', type: 'sms', status: 'failed', attempts: 3, createdAt: '2026-06-01T00:00:00.000Z' });
+  store.set({ id: 'new', type: 'slack', status: 'failed', attempts: 3, createdAt: '2026-10-01T00:00:00.000Z' });
+  const queue = new JobQueue({ store, processor: async () => 'ok', logger: silent });
+
+  assert.deepStrictEqual(queue.list().map((j) => j.id), ['new', 'mid', 'old']);
+  assert.deepStrictEqual(
+    queue.list({ status: 'failed' }).map((j) => j.id),
+    ['new', 'mid']
+  );
+  assert.deepStrictEqual(queue.list({ status: 'queued' }), []);
+});
+
+test('requeue() returns null for an unknown id', () => {
+  const queue = new JobQueue({ processor: async () => 'ok', logger: silent });
+  assert.strictEqual(queue.requeue('nope'), null);
+});
+
+test('requeue() refuses a job that is not failed', () => {
+  const store = new MemoryStore();
+  store.set({ id: 'done', type: 'email', status: 'sent', attempts: 1, error: null });
+  const queue = new JobQueue({ store, processor: async () => 'ok', logger: silent });
+  const outcome = queue.requeue('done');
+  assert.strictEqual(outcome.requeued, false);
+  assert.strictEqual(outcome.job.status, 'sent'); // untouched
+});
+
+test('requeue() resets a failed job and runs it again with a fresh budget', async () => {
+  const store = new MemoryStore();
+  store.set({
+    id: 'dead',
+    type: 'email',
+    payload: { message: 'retry me' },
+    status: 'failed',
+    attempts: 3,
+    result: null,
+    error: 'provider was down',
+  });
+  const queue = new JobQueue({ store, processor: async () => ({ ok: true }), logger: silent });
+  queue.start();
+
+  const outcome = queue.requeue('dead');
+  assert.strictEqual(outcome.requeued, true);
+
+  const done = await waitFor(queue, 'dead');
+  assert.strictEqual(done.status, 'sent');
+  // the failed job's count was reset to 0, so this success is attempt 1 —
+  // proving the requeue granted a fresh retry budget, not a 4th attempt
+  assert.strictEqual(done.attempts, 1);
+  assert.deepStrictEqual(done.result, { ok: true });
+  assert.strictEqual(done.error, null);
+});
